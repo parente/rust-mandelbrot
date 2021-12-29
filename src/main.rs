@@ -6,7 +6,7 @@ use std::fs::File;
 use std::str::FromStr;
 use structopt::StructOpt;
 
-/// Compute whether the given complex number is in the Mandlebrot set after at most limit
+/// Compute whether the given complex number is in the mandelbrot set after at most limit
 /// iterations.
 fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
     let mut z = Complex { re: 0.0, im: 0.0 };
