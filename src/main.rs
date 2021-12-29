@@ -2,11 +2,12 @@ use crossbeam;
 use image::png::PNGEncoder;
 use image::ColorType;
 use num::Complex;
-use std::env;
 use std::fs::File;
 use std::str::FromStr;
 use structopt::StructOpt;
 
+/// Compute whether the given complex number is in the Mandlebrot set after at most limit
+/// iterations.
 fn escape_time(c: Complex<f64>, limit: usize) -> Option<usize> {
     let mut z = Complex { re: 0.0, im: 0.0 };
     for i in 0..limit {
@@ -48,11 +49,28 @@ fn test_parse_pair() {
     assert_eq!(parse_pair::<f64>("0.5x1.5", 'x'), Some((0.5, 1.5)));
 }
 
+/// Parse a pair of integers separated by an x as pixel dimensions.
+fn parse_dimensions(s: &str) -> Result<(usize, usize), &'static str> {
+    match parse_pair(s, 'x') {
+        Some((w, h)) => Ok((w, h)),
+        None => Err("Could not parse dimensions"),
+    }
+}
+
+#[test]
+fn test_parse_dimensions() {
+    assert_eq!(parse_dimensions("100x200"), Ok((100, 200)));
+    assert_eq!(
+        parse_dimensions(",-0.0625"),
+        Err("Could not parse dimensions")
+    );
+}
+
 /// Parse a pair of floating-point numbers separated by a comma as a complex number.
-fn parse_complex(s: &str) -> Option<Complex<f64>> {
+fn parse_complex(s: &str) -> Result<Complex<f64>, &'static str> {
     match parse_pair(s, ',') {
-        Some((re, im)) => Some(Complex { re, im }),
-        None => None,
+        Some((re, im)) => Ok(Complex { re, im }),
+        None => Err("Could not parse complex value"),
     }
 }
 
@@ -60,12 +78,15 @@ fn parse_complex(s: &str) -> Option<Complex<f64>> {
 fn test_parse_complex() {
     assert_eq!(
         parse_complex("1.25,-0.0625"),
-        Some(Complex {
+        Ok(Complex {
             re: 1.25,
             im: -0.0625
         })
     );
-    assert_eq!(parse_complex(",-0.0625"), None);
+    assert_eq!(
+        parse_complex(",-0.0625"),
+        Err("Could not parse complex value")
+    );
 }
 
 /// Given the row and column of a pixel in the output image, return the corresponding point on the
@@ -144,47 +165,44 @@ fn write_image(
     Ok(())
 }
 
-// #[derive(StructOpt)]
-// struct MandlebrotArgs {
-//     #[structopt(short, long)]
-//     filename: String,
-//     #[structopt(long, parse(try_from_str = parse_pair))]
-//     bounds: (u32, u32),
-//     upper_left: Complex<f64>,
-//     lower_right: Complex<f64>,
-// }
+#[derive(StructOpt)]
+struct Opt {
+    /// Output PNG filename
+    filename: String,
+    /// Pixel dimensions of the image, <width>x<height>
+    #[structopt(long, parse(try_from_str = parse_dimensions))]
+    bounds: (usize, usize),
+    /// Upper-left bound of the complex space, <real>,<imaginary>
+    #[structopt(long, parse(try_from_str = parse_complex))]
+    upper_left: Complex<f64>,
+    /// Lower-right bound of the complex space, <real>,<imaginary>
+    #[structopt(long, parse(try_from_str = parse_complex))]
+    lower_right: Complex<f64>,
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let opt = Opt::from_args();
 
-    if args.len() != 5 {
-        eprintln!("Usage: {} FILE PIXELS UPPERLEFT LOWERRIGHT", args[0]);
-        eprintln!(
-            "Example: {} mandel.png 1000x750 -1.20,0.35 -1,0.20",
-            args[0]
-        );
-        std::process::exit(1);
-    }
-
-    let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
-    let upper_left = parse_complex(&args[3]).expect("error parsing upper left corner point");
-    let lower_right = parse_complex(&args[4]).expect("error parsing lower right corner point");
-
-    let mut pixels = vec![0; bounds.0 * bounds.1];
+    let mut pixels = vec![0; opt.bounds.0 * opt.bounds.1];
 
     let threads = 16;
-    let rows_per_band = bounds.1 / threads + 1;
+    let rows_per_band = opt.bounds.1 / threads + 1;
 
     {
-        let bands: Vec<&mut [u8]> = pixels.chunks_mut(rows_per_band * bounds.0).collect();
+        let bands: Vec<&mut [u8]> = pixels.chunks_mut(rows_per_band * opt.bounds.0).collect();
         crossbeam::scope(|spawner| {
             for (i, band) in bands.into_iter().enumerate() {
                 let top = rows_per_band * i;
-                let height = band.len() / bounds.0;
-                let band_bounds = (bounds.0, height);
-                let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right);
-                let band_lower_right =
-                    pixel_to_point(bounds, (bounds.0, top + height), upper_left, lower_right);
+                let height = band.len() / opt.bounds.0;
+                let band_bounds = (opt.bounds.0, height);
+                let band_upper_left =
+                    pixel_to_point(opt.bounds, (0, top), opt.upper_left, opt.lower_right);
+                let band_lower_right = pixel_to_point(
+                    opt.bounds,
+                    (opt.bounds.0, top + height),
+                    opt.upper_left,
+                    opt.lower_right,
+                );
                 spawner.spawn(move |_| {
                     render(band, band_bounds, band_upper_left, band_lower_right);
                 });
@@ -193,5 +211,5 @@ fn main() {
         .unwrap();
     }
 
-    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
+    write_image(&opt.filename[..], &pixels, opt.bounds).expect("error writing PNG file");
 }
