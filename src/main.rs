@@ -1,6 +1,7 @@
 use crossbeam;
 use image::png::PNGEncoder;
 use image::ColorType;
+use log::{debug, info};
 use num::Complex;
 use std::fs::File;
 use std::str::FromStr;
@@ -178,16 +179,27 @@ struct Opt {
     /// Lower-right bound of the complex space, <real>,<imaginary>
     #[structopt(long, parse(try_from_str = parse_complex))]
     lower_right: Complex<f64>,
+    /// Log in structured JSON format
+    #[structopt(long)]
+    json: bool,
 }
 
 fn main() {
     let opt = Opt::from_args();
 
+    if opt.json {
+        json_env_logger::init();
+    } else {
+        env_logger::init();
+    }
+
     let mut pixels = vec![0; opt.bounds.0 * opt.bounds.1];
 
     let threads = 16;
     let rows_per_band = opt.bounds.1 / threads + 1;
+    debug!("Assigning {} rows per thread", rows_per_band);
 
+    info!("Starting render");
     {
         let bands: Vec<&mut [u8]> = pixels.chunks_mut(rows_per_band * opt.bounds.0).collect();
         crossbeam::scope(|spawner| {
@@ -205,11 +217,12 @@ fn main() {
                 );
                 spawner.spawn(move |_| {
                     render(band, band_bounds, band_upper_left, band_lower_right);
+                    debug!("Finished band {} render", i);
                 });
             }
         })
         .unwrap();
     }
-
     write_image(&opt.filename[..], &pixels, opt.bounds).expect("error writing PNG file");
+    info!("Wrote file: {}", opt.filename);
 }
